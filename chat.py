@@ -68,7 +68,7 @@ def build_vector_db(docs):
 
 
 # -----------------------------
-# Sentence Model
+# Sentence model
 # -----------------------------
 @st.cache_resource
 def load_model():
@@ -76,7 +76,7 @@ def load_model():
 
 
 # -----------------------------
-# Extract Best Answer
+# Extract answer
 # -----------------------------
 def extract_answer(query, docs):
 
@@ -113,14 +113,17 @@ st.title("📄 PDF RAG Chatbot")
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# Detect new file upload
+# Detect new file
 if uploaded_file:
 
-    file_bytes = uploaded_file.getvalue()
+    file_id = uploaded_file.name + str(uploaded_file.size)
 
-    if "last_file" not in st.session_state or st.session_state.last_file != file_bytes:
+    if st.session_state.get("file_id") != file_id:
 
-        st.session_state.last_file = file_bytes
+        # Reset old retriever
+        st.session_state.clear()
+
+        st.session_state.file_id = file_id
 
         docs = load_pdf(uploaded_file)
 
@@ -134,7 +137,7 @@ if uploaded_file:
 # Ask question
 if "retriever" in st.session_state:
 
-    query = st.text_input("Ask a question from the PDF")
+    query = st.text_input("Ask a question")
 
     if query:
 
