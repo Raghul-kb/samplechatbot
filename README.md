@@ -41,4 +41,4 @@ streamlit run chat.py
 
 **Raghul**
 
-Interested in **Data Science, Machine Learning, and NLP applications**.
+Interested in **AI Engineer,Data Science, Machine Learning, and NLP applications**.
