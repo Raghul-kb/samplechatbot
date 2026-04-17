@@ -41,7 +41,7 @@ def load_pdf(pdf_file):
             docs.append(
                 Document(
                     page_content=text,
-                    metadata={"page": i+1}
+                    metadata={"page": i + 1}
                 )
             )
 
@@ -51,7 +51,6 @@ def load_pdf(pdf_file):
 # -----------------------------
 # Build Vector DB
 # -----------------------------
-@st.cache_resource
 def build_vector_db(documents):
 
     splitter = RecursiveCharacterTextSplitter(
@@ -78,7 +77,6 @@ def build_vector_db(documents):
 # -----------------------------
 @st.cache_resource
 def load_sentence_model():
-
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
@@ -100,14 +98,10 @@ def extract_best_snippet(query, retrieved_docs):
             sent = sent.strip()
 
             if len(sent) > 20:
-
                 candidate_sentences.append((sent, doc.metadata))
 
-
     if not candidate_sentences:
-
         return "No answer found", "unknown"
-
 
     query_embedding = model.encode(query, convert_to_tensor=True)
 
@@ -131,9 +125,7 @@ def extract_best_snippet(query, retrieved_docs):
 st.set_page_config(page_title="PDF Chatbot", layout="wide")
 
 st.title("📄 PDF RAG Chatbot")
-
 st.write("Upload a PDF and ask questions.")
-
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
@@ -146,14 +138,11 @@ if uploaded_file:
 
         db = build_vector_db(documents)
 
-        retriever = db.as_retriever(search_kwargs={"k":3})
-
+        retriever = db.as_retriever(search_kwargs={"k": 3})
 
     st.success("PDF processed successfully!")
 
-
     query = st.text_input("Ask a question from the PDF")
-
 
     if query:
 
@@ -166,7 +155,6 @@ if uploaded_file:
         st.success(answer)
 
         st.write(f"📄 Page: {page}")
-
 
         with st.expander("Retrieved Chunks"):
 
