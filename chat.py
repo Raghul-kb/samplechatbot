@@ -1,8 +1,8 @@
 import streamlit as st
 import fitz
-import pytesseract
-from PIL import Image
 import re
+from PIL import Image
+import pytesseract
 import os
 
 from langchain_core.documents import Document
@@ -13,188 +13,110 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer, util
 
 
-# -----------------------------
-# Tesseract Path (Only Windows)
-# -----------------------------
+# Windows OCR only
 if os.name == "nt":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
-# -----------------------------
-# Clean text
-# -----------------------------
-def clean_text(text: str):
+def clean_text(text):
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
-# -----------------------------
-# Load PDF + OCR
-# -----------------------------
-def load_pdf_with_ocr(pdf_file):
+def load_pdf(pdf_file):
 
     pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
     docs = []
 
     for i, page in enumerate(pdf):
 
-        native_text = page.get_text().strip()
-        ocr_text = ""
+        text = page.get_text()
+        text = clean_text(text)
 
-        if len(native_text) < 50:
-
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            try:
-                ocr_text = pytesseract.image_to_string(img)
-            except:
-                ocr_text = ""
-
-        full_text = clean_text(native_text + " " + ocr_text)
-
-        if full_text:
+        if text:
             docs.append(
                 Document(
-                    page_content=full_text,
-                    metadata={"page": i + 1}
+                    page_content=text,
+                    metadata={"page": i+1}
                 )
             )
 
     return docs
 
 
-# -----------------------------
-# Build Vector DB (cached)
-# -----------------------------
 @st.cache_resource
-def build_vector_db(documents):
+def build_db(docs):
 
-    text_splitter = RecursiveCharacterTextSplitter(
+    splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=80
     )
 
-    chunks = text_splitter.split_documents(documents)
+    chunks = splitter.split_documents(docs)
 
-    embedding_model = HuggingFaceEmbeddings(
+    embed = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    db = Chroma.from_documents(
-        documents=chunks,
-        embedding=embedding_model
-    )
+    db = Chroma.from_documents(chunks, embed)
 
     return db
 
 
-# -----------------------------
-# Sentence extractor
-# -----------------------------
 @st.cache_resource
-def load_sentence_model():
+def load_model():
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
-def extract_best_snippet(query, retrieved_docs):
+def answer_query(query, docs):
 
-    model = load_sentence_model()
+    model = load_model()
 
-    candidate_sentences = []
+    sentences = []
+    metas = []
 
-    for doc in retrieved_docs:
+    for d in docs:
 
-        sentences = re.split(r'(?<=[.!?])\s+', doc.page_content)
+        s = re.split(r'(?<=[.!?])\s+', d.page_content)
 
-        for sent in sentences:
+        for x in s:
+            if len(x) > 20:
+                sentences.append(x)
+                metas.append(d.metadata)
 
-            sent = sent.strip()
+    q_emb = model.encode(query, convert_to_tensor=True)
+    s_emb = model.encode(sentences, convert_to_tensor=True)
 
-            if len(sent) > 20:
-                candidate_sentences.append((sent, doc.metadata))
+    scores = util.cos_sim(q_emb, s_emb)[0]
 
-    if not candidate_sentences:
-        return "No answer found", "unknown"
+    idx = int(scores.argmax())
 
-    query_embedding = model.encode(query, convert_to_tensor=True)
-
-    sentence_texts = [s[0] for s in candidate_sentences]
-
-    sentence_embeddings = model.encode(sentence_texts, convert_to_tensor=True)
-
-    scores = util.cos_sim(query_embedding, sentence_embeddings)[0]
-
-    best_idx = int(scores.argmax())
-
-    best_sentence, meta = candidate_sentences[best_idx]
-
-    return best_sentence, meta.get("page", "unknown")
+    return sentences[idx], metas[idx]["page"]
 
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.set_page_config(page_title="PDF RAG Chatbot", layout="wide")
+# ---------------- UI ----------------
 
-st.title("📄 PDF RAG Chatbot")
-st.write("Upload a PDF and ask questions.")
+st.title("PDF Chatbot")
 
-uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+file = st.file_uploader("Upload PDF", type="pdf")
 
+if file:
 
-if uploaded_file:
+    docs = load_pdf(file)
 
-    with st.spinner("Processing PDF..."):
+    db = build_db(docs)
 
-        documents = load_pdf_with_ocr(uploaded_file)
+    retriever = db.as_retriever(search_kwargs={"k":3})
 
-        db = build_vector_db(documents)
+    q = st.text_input("Ask a question")
 
-        retriever = db.as_retriever(search_kwargs={"k": 3})
+    if q:
 
-    st.success("PDF processed successfully!")
+        retrieved = retriever.invoke(q)
 
-    # -----------------------------
-    # Chat history
-    # -----------------------------
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+        ans, page = answer_query(q, retrieved)
 
-    # Display chat history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+        st.success(ans)
 
-    # User input
-    query = st.chat_input("Ask something about the PDF")
-
-    if query:
-
-        st.session_state.messages.append({"role": "user", "content": query})
-
-        with st.chat_message("user"):
-            st.markdown(query)
-
-        retrieved_docs = retriever.invoke(query)
-
-        answer, page = extract_best_snippet(query, retrieved_docs)
-
-        response = f"{answer}\n\n📄 **Page:** {page}"
-
-        with st.chat_message("assistant"):
-            st.markdown(response)
-
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response}
-        )
-
-        # Show retrieved chunks
-        with st.expander("Retrieved Chunks"):
-
-            for i, doc in enumerate(retrieved_docs, 1):
-
-                st.write(f"Chunk {i} | Page {doc.metadata.get('page')}")
-                st.write(doc.page_content[:500])
-                st.write("---")
+        st.write("Page:", page)
