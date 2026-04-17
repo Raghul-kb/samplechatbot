@@ -1,6 +1,7 @@
 import streamlit as st
 import fitz
 import re
+import os
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,15 +10,17 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain_community.llms import HuggingFaceHub
+from langchain_openai import ChatOpenAI
 
 
 # -----------------------------
 # Clean text
 # -----------------------------
 def clean_text(text):
+
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
+
     return text
 
 
@@ -27,14 +30,17 @@ def clean_text(text):
 def load_pdf(file):
 
     pdf = fitz.open(stream=file.read(), filetype="pdf")
+
     docs = []
 
     for i, page in enumerate(pdf):
 
         text = page.get_text()
+
         text = clean_text(text)
 
         if text:
+
             docs.append(
                 Document(
                     page_content=text,
@@ -70,13 +76,13 @@ def build_vector_db(docs):
 
 
 # -----------------------------
-# Load LLM
+# Load Groq LLM
 # -----------------------------
 def load_llm():
 
     llm = ChatOpenAI(
         base_url="https://api.groq.com/openai/v1",
-        api_key=os.getenv("GROQ_API_KEY"),
+        api_key=st.secrets["GROQ_API_KEY"],
         model="llama-3.3-70b-versatile",
         temperature=0
     )
@@ -85,7 +91,7 @@ def load_llm():
 
 
 # -----------------------------
-# Generate Answer with LLM
+# Generate Answer
 # -----------------------------
 def generate_answer(query, docs):
 
@@ -110,7 +116,10 @@ Answer:
 
     llm = load_llm()
 
-    chain = LLMChain(llm=llm, prompt=prompt)
+    chain = LLMChain(
+        llm=llm,
+        prompt=prompt
+    )
 
     response = chain.run({
         "context": context,
@@ -121,14 +130,14 @@ Answer:
 
 
 # -----------------------------
-# UI
+# Streamlit UI
 # -----------------------------
 st.title("📄 Raghul RAG Chatbot")
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# Detect new file upload
+# Detect new file
 if uploaded_file:
 
     file_id = uploaded_file.name + str(uploaded_file.size)
@@ -143,7 +152,9 @@ if uploaded_file:
 
         db = build_vector_db(docs)
 
-        st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
+        st.session_state.retriever = db.as_retriever(
+            search_kwargs={"k": 3}
+        )
 
         st.success("PDF processed successfully!")
 
