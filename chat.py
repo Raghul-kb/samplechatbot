@@ -1,7 +1,6 @@
 import streamlit as st
 import fitz
 import re
-import os
 
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
@@ -9,7 +8,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-from langchain.chains import LLMChain
 from langchain_openai import ChatOpenAI
 
 
@@ -17,10 +15,8 @@ from langchain_openai import ChatOpenAI
 # Clean text
 # -----------------------------
 def clean_text(text):
-
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
-
     return text
 
 
@@ -36,15 +32,13 @@ def load_pdf(file):
     for i, page in enumerate(pdf):
 
         text = page.get_text()
-
         text = clean_text(text)
 
         if text:
-
             docs.append(
                 Document(
                     page_content=text,
-                    metadata={"page": i + 1}
+                    metadata={"page": i+1}
                 )
             )
 
@@ -76,7 +70,7 @@ def build_vector_db(docs):
 
 
 # -----------------------------
-# Load Groq LLM
+# Load LLM (Groq)
 # -----------------------------
 def load_llm():
 
@@ -97,9 +91,7 @@ def generate_answer(query, docs):
 
     context = "\n\n".join([d.page_content for d in docs])
 
-    prompt = PromptTemplate(
-        input_variables=["context", "question"],
-        template="""
+    prompt = f"""
 You are a helpful assistant.
 
 Answer the question using ONLY the information from the context.
@@ -108,25 +100,16 @@ Context:
 {context}
 
 Question:
-{question}
+{query}
 
 Answer:
 """
-    )
 
     llm = load_llm()
 
-    chain = LLMChain(
-        llm=llm,
-        prompt=prompt
-    )
+    response = llm.invoke(prompt)
 
-    response = chain.run({
-        "context": context,
-        "question": query
-    })
-
-    return response
+    return response.content
 
 
 # -----------------------------
@@ -137,7 +120,7 @@ st.title("📄 Raghul RAG Chatbot")
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# Detect new file
+# Detect new file upload
 if uploaded_file:
 
     file_id = uploaded_file.name + str(uploaded_file.size)
