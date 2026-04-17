@@ -1,9 +1,6 @@
 import streamlit as st
 import fitz
 import re
-from PIL import Image
-import pytesseract
-import os
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,28 +10,34 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer, util
 
 
-# Windows OCR only
-if os.name == "nt":
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-
+# -----------------------------
+# Clean text
+# -----------------------------
 def clean_text(text):
+
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
+
     return text
 
 
+# -----------------------------
+# Load PDF
+# -----------------------------
 def load_pdf(pdf_file):
 
     pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
+
     docs = []
 
     for i, page in enumerate(pdf):
 
         text = page.get_text()
+
         text = clean_text(text)
 
         if text:
+
             docs.append(
                 Document(
                     page_content=text,
@@ -45,78 +48,132 @@ def load_pdf(pdf_file):
     return docs
 
 
+# -----------------------------
+# Build Vector DB
+# -----------------------------
 @st.cache_resource
-def build_db(docs):
+def build_vector_db(documents):
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=80
     )
 
-    chunks = splitter.split_documents(docs)
+    chunks = splitter.split_documents(documents)
 
-    embed = HuggingFaceEmbeddings(
+    embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    db = Chroma.from_documents(chunks, embed)
+    db = Chroma.from_documents(
+        documents=chunks,
+        embedding=embedding_model
+    )
 
     return db
 
 
+# -----------------------------
+# Load sentence model
+# -----------------------------
 @st.cache_resource
-def load_model():
+def load_sentence_model():
+
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
-def answer_query(query, docs):
+# -----------------------------
+# Extract best answer
+# -----------------------------
+def extract_best_snippet(query, retrieved_docs):
 
-    model = load_model()
+    model = load_sentence_model()
 
-    sentences = []
-    metas = []
+    candidate_sentences = []
 
-    for d in docs:
+    for doc in retrieved_docs:
 
-        s = re.split(r'(?<=[.!?])\s+', d.page_content)
+        sentences = re.split(r'(?<=[.!?])\s+', doc.page_content)
 
-        for x in s:
-            if len(x) > 20:
-                sentences.append(x)
-                metas.append(d.metadata)
+        for sent in sentences:
 
-    q_emb = model.encode(query, convert_to_tensor=True)
-    s_emb = model.encode(sentences, convert_to_tensor=True)
+            sent = sent.strip()
 
-    scores = util.cos_sim(q_emb, s_emb)[0]
+            if len(sent) > 20:
 
-    idx = int(scores.argmax())
-
-    return sentences[idx], metas[idx]["page"]
+                candidate_sentences.append((sent, doc.metadata))
 
 
-# ---------------- UI ----------------
+    if not candidate_sentences:
 
-st.title("PDF Chatbot")
+        return "No answer found", "unknown"
 
-file = st.file_uploader("Upload PDF", type="pdf")
 
-if file:
+    query_embedding = model.encode(query, convert_to_tensor=True)
 
-    docs = load_pdf(file)
+    sentence_texts = [s[0] for s in candidate_sentences]
 
-    db = build_db(docs)
+    sentence_embeddings = model.encode(sentence_texts, convert_to_tensor=True)
 
-    retriever = db.as_retriever(search_kwargs={"k":3})
+    scores = util.cos_sim(query_embedding, sentence_embeddings)[0]
 
-    q = st.text_input("Ask a question")
+    best_idx = int(scores.argmax())
 
-    if q:
+    best_sentence, meta = candidate_sentences[best_idx]
 
-        retrieved = retriever.invoke(q)
+    return best_sentence, meta.get("page", "unknown")
 
-        ans, page = answer_query(q, retrieved)
 
-        st.success(ans)
+# -----------------------------
+# Streamlit UI
+# -----------------------------
 
-        st.write("Page:", page)
+st.set_page_config(page_title="PDF Chatbot", layout="wide")
+
+st.title("📄 PDF RAG Chatbot")
+
+st.write("Upload a PDF and ask questions.")
+
+
+uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+
+
+if uploaded_file:
+
+    with st.spinner("Processing PDF..."):
+
+        documents = load_pdf(uploaded_file)
+
+        db = build_vector_db(documents)
+
+        retriever = db.as_retriever(search_kwargs={"k":3})
+
+
+    st.success("PDF processed successfully!")
+
+
+    query = st.text_input("Ask a question from the PDF")
+
+
+    if query:
+
+        retrieved_docs = retriever.invoke(query)
+
+        answer, page = extract_best_snippet(query, retrieved_docs)
+
+        st.markdown("### 💡 Answer")
+
+        st.success(answer)
+
+        st.write(f"📄 Page: {page}")
+
+
+        with st.expander("Retrieved Chunks"):
+
+            for i, doc in enumerate(retrieved_docs, 1):
+
+                st.write(f"Chunk {i} | Page {doc.metadata.get('page')}")
+
+                st.write(doc.page_content[:500])
+
+                st.write("---")
