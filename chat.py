@@ -3,11 +3,9 @@ import fitz
 import re
 
 from langchain_core.documents import Document
-from langchain_core.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-
 from langchain_openai import ChatOpenAI
 
 
@@ -120,7 +118,16 @@ st.title("📄 Raghul RAG Chatbot")
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
+# -----------------------------
+# Session State Setup
+# -----------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+
+# -----------------------------
 # Detect new file upload
+# -----------------------------
 if uploaded_file:
 
     file_id = uploaded_file.name + str(uploaded_file.size)
@@ -130,29 +137,51 @@ if uploaded_file:
         st.session_state.clear()
 
         st.session_state.file_id = file_id
+        st.session_state.messages = []
 
         docs = load_pdf(uploaded_file)
 
         db = build_vector_db(docs)
 
-        st.session_state.retriever = db.as_retriever(
-            search_kwargs={"k": 3}
-        )
+        st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
 
         st.success("PDF processed successfully!")
 
 
-# Ask question
+# -----------------------------
+# Show Chat History
+# -----------------------------
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+
+# -----------------------------
+# Chat Input
+# -----------------------------
 if "retriever" in st.session_state:
 
-    query = st.text_input("Ask a question")
+    user_prompt = st.chat_input("Ask a question about the PDF")
 
-    if query:
+    if user_prompt:
 
-        retrieved_docs = st.session_state.retriever.invoke(query)
+        # show user message
+        st.session_state.messages.append(
+            {"role": "user", "content": user_prompt}
+        )
 
-        answer = generate_answer(query, retrieved_docs)
+        with st.chat_message("user"):
+            st.write(user_prompt)
 
-        st.markdown("### 💡 Answer")
+        # retrieve docs
+        retrieved_docs = st.session_state.retriever.invoke(user_prompt)
 
-        st.success(answer)
+        answer = generate_answer(user_prompt, retrieved_docs)
+
+        # show assistant message
+        with st.chat_message("assistant"):
+            st.write(answer)
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer}
+        )
