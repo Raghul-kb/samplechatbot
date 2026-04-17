@@ -3,6 +3,7 @@ import fitz
 import pytesseract
 from PIL import Image
 import re
+import os
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -12,27 +13,25 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer, util
 
 
-# ----------------------------------
-# Tesseract path
-# ----------------------------------
-import os
-
+# -----------------------------
+# Tesseract Path (Only Windows)
+# -----------------------------
 if os.name == "nt":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
-# ----------------------------------
+# -----------------------------
 # Clean text
-# ----------------------------------
+# -----------------------------
 def clean_text(text: str):
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
-# ----------------------------------
-# PDF Loader with OCR
-# ----------------------------------
+# -----------------------------
+# Load PDF + OCR
+# -----------------------------
 def load_pdf_with_ocr(pdf_file):
 
     pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
@@ -45,31 +44,63 @@ def load_pdf_with_ocr(pdf_file):
 
         if len(native_text) < 50:
 
-            pix = page.get_pixmap(matrix=fitz.Matrix(2,2))
-            img = Image.frombytes("RGB",[pix.width,pix.height],pix.samples)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            ocr_text = pytesseract.image_to_string(img)
+            try:
+                ocr_text = pytesseract.image_to_string(img)
+            except:
+                ocr_text = ""
 
         full_text = clean_text(native_text + " " + ocr_text)
 
         if full_text:
-
             docs.append(
                 Document(
                     page_content=full_text,
-                    metadata={"page": i+1}
+                    metadata={"page": i + 1}
                 )
             )
 
     return docs
 
 
-# ----------------------------------
+# -----------------------------
+# Build Vector DB (cached)
+# -----------------------------
+@st.cache_resource
+def build_vector_db(documents):
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=80
+    )
+
+    chunks = text_splitter.split_documents(documents)
+
+    embedding_model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    db = Chroma.from_documents(
+        documents=chunks,
+        embedding=embedding_model
+    )
+
+    return db
+
+
+# -----------------------------
 # Sentence extractor
-# ----------------------------------
+# -----------------------------
+@st.cache_resource
+def load_sentence_model():
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
 def extract_best_snippet(query, retrieved_docs):
 
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    model = load_sentence_model()
 
     candidate_sentences = []
 
@@ -85,7 +116,7 @@ def extract_best_snippet(query, retrieved_docs):
                 candidate_sentences.append((sent, doc.metadata))
 
     if not candidate_sentences:
-        return "No answer found"
+        return "No answer found", "unknown"
 
     query_embedding = model.encode(query, convert_to_tensor=True)
 
@@ -102,17 +133,16 @@ def extract_best_snippet(query, retrieved_docs):
     return best_sentence, meta.get("page", "unknown")
 
 
-# ----------------------------------
+# -----------------------------
 # Streamlit UI
-# ----------------------------------
-
-st.set_page_config(page_title="PDF Chatbot", layout="wide")
+# -----------------------------
+st.set_page_config(page_title="PDF RAG Chatbot", layout="wide")
 
 st.title("📄 PDF RAG Chatbot")
-
 st.write("Upload a PDF and ask questions.")
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+
 
 if uploaded_file:
 
@@ -120,45 +150,47 @@ if uploaded_file:
 
         documents = load_pdf_with_ocr(uploaded_file)
 
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=80
-        )
+        db = build_vector_db(documents)
 
-        chunks = text_splitter.split_documents(documents)
-
-        embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-
-        db = Chroma.from_documents(
-            documents=chunks,
-            embedding=embedding_model,
-            persist_directory="chroma_db"
-        )
-
-        retriever = db.as_retriever(search_kwargs={"k":3})
+        retriever = db.as_retriever(search_kwargs={"k": 3})
 
     st.success("PDF processed successfully!")
 
-    # ----------------------------
-    # Chat UI
-    # ----------------------------
+    # -----------------------------
+    # Chat history
+    # -----------------------------
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    query = st.text_input("Ask a question from the PDF")
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # User input
+    query = st.chat_input("Ask something about the PDF")
 
     if query:
+
+        st.session_state.messages.append({"role": "user", "content": query})
+
+        with st.chat_message("user"):
+            st.markdown(query)
 
         retrieved_docs = retriever.invoke(query)
 
         answer, page = extract_best_snippet(query, retrieved_docs)
 
-        st.markdown("### 💡 Answer")
+        response = f"{answer}\n\n📄 **Page:** {page}"
 
-        st.success(answer)
+        with st.chat_message("assistant"):
+            st.markdown(response)
 
-        st.write(f"📄 Page: {page}")
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
 
+        # Show retrieved chunks
         with st.expander("Retrieved Chunks"):
 
             for i, doc in enumerate(retrieved_docs, 1):
