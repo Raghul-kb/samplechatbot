@@ -7,7 +7,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-from sentence_transformers import SentenceTransformer, util
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from langchain_community.llms import HuggingFaceHub
 
 
 # -----------------------------
@@ -36,7 +38,7 @@ def load_pdf(file):
             docs.append(
                 Document(
                     page_content=text,
-                    metadata={"page": i+1}
+                    metadata={"page": i + 1}
                 )
             )
 
@@ -68,59 +70,72 @@ def build_vector_db(docs):
 
 
 # -----------------------------
-# Sentence model
+# Load LLM
 # -----------------------------
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+def load_llm():
+
+   llm = ChatOpenAI(
+     base_url="https://api.groq.com/openai/v1",
+     api_key=os.getenv("GROQ_API_KEY"),
+     model="llama-3.3-70b-versatile",
+     temperature=0
+     )
+    )
+
+    return llm
 
 
 # -----------------------------
-# Extract answer
+# Generate Answer with LLM
 # -----------------------------
-def extract_answer(query, docs):
+def generate_answer(query, docs):
 
-    model = load_model()
+    context = "\n\n".join([d.page_content for d in docs])
 
-    sentences = []
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template="""
+You are a helpful assistant.
 
-    for d in docs:
+Answer the question using ONLY the information from the context.
 
-        parts = re.split(r'(?<=[.!?])\s+', d.page_content)
+Context:
+{context}
 
-        for s in parts:
-            if len(s) > 20:
-                sentences.append(s)
+Question:
+{question}
 
-    if not sentences:
-        return "No answer found."
+Answer:
+"""
+    )
 
-    q_emb = model.encode(query, convert_to_tensor=True)
-    s_emb = model.encode(sentences, convert_to_tensor=True)
+    llm = load_llm()
 
-    scores = util.cos_sim(q_emb, s_emb)[0]
+    chain = LLMChain(llm=llm, prompt=prompt)
 
-    best = sentences[int(scores.argmax())]
+    response = chain.run({
+        "context": context,
+        "question": query
+    })
 
-    return best
+    return response
 
 
 # -----------------------------
 # UI
 # -----------------------------
-st.title("📄 RAGHUL RAG Chatbot")
+st.title("📄 Raghul RAG Chatbot")
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# Detect new file
+# Detect new file upload
 if uploaded_file:
 
     file_id = uploaded_file.name + str(uploaded_file.size)
 
     if st.session_state.get("file_id") != file_id:
 
-        # Reset old retriever
         st.session_state.clear()
 
         st.session_state.file_id = file_id
@@ -129,7 +144,7 @@ if uploaded_file:
 
         db = build_vector_db(docs)
 
-        st.session_state.retriever = db.as_retriever(search_kwargs={"k":3})
+        st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
 
         st.success("PDF processed successfully!")
 
@@ -143,7 +158,8 @@ if "retriever" in st.session_state:
 
         retrieved_docs = st.session_state.retriever.invoke(query)
 
-        answer = extract_answer(query, retrieved_docs)
+        answer = generate_answer(query, retrieved_docs)
 
         st.markdown("### 💡 Answer")
+
         st.success(answer)
