@@ -74,12 +74,11 @@ def build_vector_db(docs):
 # -----------------------------
 def load_llm():
 
-   llm = ChatOpenAI(
-     base_url="https://api.groq.com/openai/v1",
-     api_key=os.getenv("GROQ_API_KEY"),
-     model="llama-3.3-70b-versatile",
-     temperature=0
-     )
+    llm = ChatOpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("GROQ_API_KEY"),
+        model="llama-3.3-70b-versatile",
+        temperature=0
     )
 
     return llm
