@@ -14,10 +14,8 @@ from sentence_transformers import SentenceTransformer, util
 # Clean text
 # -----------------------------
 def clean_text(text):
-
     text = text.replace("\n", " ")
     text = re.sub(r"\s+", " ", text).strip()
-
     return text
 
 
@@ -27,17 +25,14 @@ def clean_text(text):
 def load_pdf(pdf_file):
 
     pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
-
     docs = []
 
     for i, page in enumerate(pdf):
 
         text = page.get_text()
-
         text = clean_text(text)
 
         if text:
-
             docs.append(
                 Document(
                     page_content=text,
@@ -122,31 +117,45 @@ def extract_best_snippet(query, retrieved_docs):
 # Streamlit UI
 # -----------------------------
 
-st.set_page_config(page_title="PDF Chatbot", layout="wide")
+st.set_page_config(page_title="PDF RAG Chatbot", layout="wide")
 
 st.title("📄 PDF RAG Chatbot")
 st.write("Upload a PDF and ask questions.")
 
+
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-if uploaded_file:
+# -----------------------------
+# When new file is uploaded
+# -----------------------------
+if uploaded_file is not None:
 
-    with st.spinner("Processing PDF..."):
+    if "current_file" not in st.session_state or st.session_state.current_file != uploaded_file.name:
 
-        documents = load_pdf(uploaded_file)
+        st.session_state.current_file = uploaded_file.name
 
-        db = build_vector_db(documents)
+        with st.spinner("Processing PDF..."):
 
-        retriever = db.as_retriever(search_kwargs={"k": 3})
+            documents = load_pdf(uploaded_file)
 
-    st.success("PDF processed successfully!")
+            db = build_vector_db(documents)
+
+            st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
+
+        st.success("PDF processed successfully!")
+
+
+# -----------------------------
+# Ask question
+# -----------------------------
+if "retriever" in st.session_state:
 
     query = st.text_input("Ask a question from the PDF")
 
     if query:
 
-        retrieved_docs = retriever.invoke(query)
+        retrieved_docs = st.session_state.retriever.invoke(query)
 
         answer, page = extract_best_snippet(query, retrieved_docs)
 
