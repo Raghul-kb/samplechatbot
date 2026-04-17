@@ -25,18 +25,21 @@ def clean_text(text):
 def load_pdf(pdf_file):
 
     pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
+
     docs = []
 
     for i, page in enumerate(pdf):
 
         text = page.get_text()
+
         text = clean_text(text)
 
         if text:
+
             docs.append(
                 Document(
                     page_content=text,
-                    metadata={"page": i + 1}
+                    metadata={"page": i+1}
                 )
             )
 
@@ -68,7 +71,7 @@ def build_vector_db(documents):
 
 
 # -----------------------------
-# Load sentence model
+# Sentence model
 # -----------------------------
 @st.cache_resource
 def load_sentence_model():
@@ -76,79 +79,59 @@ def load_sentence_model():
 
 
 # -----------------------------
-# Extract best answer
+# Extract answer
 # -----------------------------
 def extract_best_snippet(query, retrieved_docs):
 
     model = load_sentence_model()
 
-    candidate_sentences = []
+    sentences = []
+    metas = []
 
     for doc in retrieved_docs:
 
-        sentences = re.split(r'(?<=[.!?])\s+', doc.page_content)
+        s = re.split(r'(?<=[.!?])\s+', doc.page_content)
 
-        for sent in sentences:
+        for x in s:
+            if len(x) > 20:
+                sentences.append(x)
+                metas.append(doc.metadata)
 
-            sent = sent.strip()
-
-            if len(sent) > 20:
-                candidate_sentences.append((sent, doc.metadata))
-
-    if not candidate_sentences:
+    if not sentences:
         return "No answer found", "unknown"
 
-    query_embedding = model.encode(query, convert_to_tensor=True)
+    q_emb = model.encode(query, convert_to_tensor=True)
+    s_emb = model.encode(sentences, convert_to_tensor=True)
 
-    sentence_texts = [s[0] for s in candidate_sentences]
+    scores = util.cos_sim(q_emb, s_emb)[0]
 
-    sentence_embeddings = model.encode(sentence_texts, convert_to_tensor=True)
+    idx = int(scores.argmax())
 
-    scores = util.cos_sim(query_embedding, sentence_embeddings)[0]
-
-    best_idx = int(scores.argmax())
-
-    best_sentence, meta = candidate_sentences[best_idx]
-
-    return best_sentence, meta.get("page", "unknown")
+    return sentences[idx], metas[idx]["page"]
 
 
 # -----------------------------
-# Streamlit UI
+# UI
 # -----------------------------
-
-st.set_page_config(page_title="PDF RAG Chatbot", layout="wide")
-
 st.title("📄 PDF RAG Chatbot")
-st.write("Upload a PDF and ask questions.")
-
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# -----------------------------
-# When new file is uploaded
-# -----------------------------
-if uploaded_file is not None:
+# When new file uploaded
+if uploaded_file:
 
-    if "current_file" not in st.session_state or st.session_state.current_file != uploaded_file.name:
+    # Always rebuild DB for uploaded file
+    documents = load_pdf(uploaded_file)
 
-        st.session_state.current_file = uploaded_file.name
+    db = build_vector_db(documents)
 
-        with st.spinner("Processing PDF..."):
+    st.session_state.retriever = db.as_retriever(search_kwargs={"k":3})
 
-            documents = load_pdf(uploaded_file)
-
-            db = build_vector_db(documents)
-
-            st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
-
-        st.success("PDF processed successfully!")
+    st.success("PDF processed successfully!")
 
 
-# -----------------------------
 # Ask question
-# -----------------------------
 if "retriever" in st.session_state:
 
     query = st.text_input("Ask a question from the PDF")
@@ -164,13 +147,3 @@ if "retriever" in st.session_state:
         st.success(answer)
 
         st.write(f"📄 Page: {page}")
-
-        with st.expander("Retrieved Chunks"):
-
-            for i, doc in enumerate(retrieved_docs, 1):
-
-                st.write(f"Chunk {i} | Page {doc.metadata.get('page')}")
-
-                st.write(doc.page_content[:500])
-
-                st.write("---")
