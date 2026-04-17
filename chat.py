@@ -22,20 +22,17 @@ def clean_text(text):
 # -----------------------------
 # Load PDF
 # -----------------------------
-def load_pdf(pdf_file):
+def load_pdf(file):
 
-    pdf = fitz.open(stream=pdf_file.read(), filetype="pdf")
-
+    pdf = fitz.open(stream=file.read(), filetype="pdf")
     docs = []
 
     for i, page in enumerate(pdf):
 
         text = page.get_text()
-
         text = clean_text(text)
 
         if text:
-
             docs.append(
                 Document(
                     page_content=text,
@@ -49,65 +46,63 @@ def load_pdf(pdf_file):
 # -----------------------------
 # Build Vector DB
 # -----------------------------
-def build_vector_db(documents):
+def build_vector_db(docs):
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=80
     )
 
-    chunks = splitter.split_documents(documents)
+    chunks = splitter.split_documents(docs)
 
-    embedding_model = HuggingFaceEmbeddings(
+    embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     db = Chroma.from_documents(
         documents=chunks,
-        embedding=embedding_model
+        embedding=embeddings
     )
 
     return db
 
 
 # -----------------------------
-# Sentence model
+# Sentence Model
 # -----------------------------
 @st.cache_resource
-def load_sentence_model():
+def load_model():
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
 # -----------------------------
-# Extract answer
+# Extract Best Answer
 # -----------------------------
-def extract_best_snippet(query, retrieved_docs):
+def extract_answer(query, docs):
 
-    model = load_sentence_model()
+    model = load_model()
 
     sentences = []
-    metas = []
 
-    for doc in retrieved_docs:
+    for d in docs:
 
-        s = re.split(r'(?<=[.!?])\s+', doc.page_content)
+        parts = re.split(r'(?<=[.!?])\s+', d.page_content)
 
-        for x in s:
-            if len(x) > 20:
-                sentences.append(x)
-                metas.append(doc.metadata)
+        for s in parts:
+            if len(s) > 20:
+                sentences.append(s)
 
     if not sentences:
-        return "No answer found", "unknown"
+        return "No answer found."
 
     q_emb = model.encode(query, convert_to_tensor=True)
     s_emb = model.encode(sentences, convert_to_tensor=True)
 
     scores = util.cos_sim(q_emb, s_emb)[0]
 
-    idx = int(scores.argmax())
+    best = sentences[int(scores.argmax())]
 
-    return sentences[idx], metas[idx]["page"]
+    return best
 
 
 # -----------------------------
@@ -118,17 +113,22 @@ st.title("📄 PDF RAG Chatbot")
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
 
-# When new file uploaded
+# Detect new file upload
 if uploaded_file:
 
-    # Always rebuild DB for uploaded file
-    documents = load_pdf(uploaded_file)
+    file_bytes = uploaded_file.getvalue()
 
-    db = build_vector_db(documents)
+    if "last_file" not in st.session_state or st.session_state.last_file != file_bytes:
 
-    st.session_state.retriever = db.as_retriever(search_kwargs={"k":3})
+        st.session_state.last_file = file_bytes
 
-    st.success("PDF processed successfully!")
+        docs = load_pdf(uploaded_file)
+
+        db = build_vector_db(docs)
+
+        st.session_state.retriever = db.as_retriever(search_kwargs={"k":3})
+
+        st.success("PDF processed successfully!")
 
 
 # Ask question
@@ -140,10 +140,7 @@ if "retriever" in st.session_state:
 
         retrieved_docs = st.session_state.retriever.invoke(query)
 
-        answer, page = extract_best_snippet(query, retrieved_docs)
+        answer = extract_answer(query, retrieved_docs)
 
         st.markdown("### 💡 Answer")
-
         st.success(answer)
-
-        st.write(f"📄 Page: {page}")
