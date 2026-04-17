@@ -108,7 +108,7 @@ def extract_answer(query, docs):
 # -----------------------------
 # UI
 # -----------------------------
-st.title("📄 PDF RAG Chatbot")
+st.title("📄 RAGHUL RAG Chatbot")
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
